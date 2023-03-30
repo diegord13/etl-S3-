@@ -1,0 +1,87 @@
+import pandas as pd
+import boto3
+from io import StringIO
+import StaticValsDev
+from sqlalchemy import create_engine
+import math
+from datetime import datetime, date, timedelta
+import sys
+
+
+def processDataframe(df):
+    print(df.shape)
+
+    df=df.rename(columns={'visitdatetime': 'visit_datetime',
+                       'actiondatetime': 'action_datetime',
+                       'usersessionid': 'user_session_id',
+                       'actionid': 'action_id',
+                       'action': 'action',
+                       'totalactionrevenue': 'total_action_revenue',
+                       'actionsessionprobability': 'action_session_probability',
+                       'actionprobability': 'action_probability',
+                       'attributedrevenue': 'attributed_revenue',
+                       'spottime': 'spot_time',
+                       'network': 'network',
+                       'region': 'region',
+                       'creative': 'creative',
+                       'origin': 'origin',
+                       'tv2mediatype': 'tv2_mediatype',
+                       'product': 'product',
+                       'customeruserref': 'customer_user_ref',
+                       'medium': 'medium',
+                       't_usersessionactions_promo': 't_user_session_actions_promo',
+                       't_adspots_channel': 't_adspots_channel',
+                       't_adspots_clocknumber': 't_adspots_clocknumber',
+                       't_adspots_datagroup': 't_adspots_datagroup',
+                       't_adspots_impressionsk': 't_adspots_impressionsk',
+                       't_adspots_weekday': 't_adspots_weekday'})
+    df.to_sql('tvsquared', schema='one_offs', con=engine, index=False, if_exists='append', method='multi')
+    return True
+
+def read_logs(filename, client):
+    object_key = filename
+    csv_obj = client.get_object(Bucket=StaticValsDev.BUCKET_NAME, Key=object_key)
+    body = csv_obj['Body']
+    csv_string = body.read().decode('utf-8')
+    df = pd.read_csv(StringIO(csv_string),skiprows=11)
+    return df
+
+def get_file_list_s3(prefix, file_extension):
+    s3 = boto3.resource('s3', aws_access_key_id=StaticValsDev.AWS_ID,
+                        aws_secret_access_key=StaticValsDev.AWS_SECRET)
+    my_bucket = s3.Bucket(StaticValsDev.BUCKET_NAME)
+    file_objs = my_bucket.objects.filter(Prefix=prefix).all()
+
+    file_names = [file_obj.key for file_obj in file_objs if
+                  file_extension is not None and file_obj.key.split(".")[-1] == file_extension]
+    return file_names
+
+
+def divFile(df, chunck):
+    longitud = df.shape[0]
+    for i in range(chunck):
+        print(i)
+        if i == 0:
+            processDataframe(df.iloc[:math.floor(longitud / chunck), :])
+
+        elif i == chunck-1:
+            processDataframe(df.iloc[math.floor((longitud / chunck) * (chunck-1)) + 1:, :])
+
+        else:
+            processDataframe(df.iloc[math.floor((longitud / chunck) * i) + 1: math.floor((longitud / chunck) * (i+1)), :])
+            # df_4 = processDataframe(df.iloc[math.floor((longitud/5)*3)+1: math.floor((longitud/5)*4), :])
+
+if __name__ == '__main__':
+    # sys.stdout = open('file', 'w')
+    engine = create_engine("postgresql://" + StaticValsDev.USER + ":" + StaticValsDev.PASS + "@" + StaticValsDev.ENDPOINT + ":" + StaticValsDev.PORT + "/" + StaticValsDev.DB)
+    client = boto3.client('s3', aws_access_key_id=StaticValsDev.AWS_ID,
+                          aws_secret_access_key=StaticValsDev.AWS_SECRET)
+    filenames = get_file_list_s3("egress/input/tvsquared", "csv")
+
+    for i in filenames:
+        print(i.split("/")[3])
+        df = read_logs(i, client)
+        df['dt'] = date.today()
+        print(df['dt'])
+
+        output = divFile(df, 5)
